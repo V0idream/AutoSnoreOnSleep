@@ -1,0 +1,36 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'app.sleep.autosnore'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'app.sleep.autosnore'
+        minSdk 31
+        targetSdk 35
+        versionCode 8
+        versionName '1.7.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    lint {
+        checkReleaseBuilds false
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    compileOnly project(':xposed-api-stub')
+}
