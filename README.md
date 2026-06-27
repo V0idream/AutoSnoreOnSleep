@@ -27,7 +27,12 @@
 ![Android](https://img.shields.io/badge/Android-12%2B-7C3AED)
 ![SDK](https://img.shields.io/badge/SDK-35-FF5722)
 ![Release](https://img.shields.io/github/v/release/V0idream/AutoSnoreOnSleep?include_prereleases)
-![Downloads](https://img.shields.io/github/downloads/V0idream/AutoSnoreOnSleep/total)
+
+<p>
+  <a href="https://github.com/V0idream/AutoSnoreOnSleep/releases">
+    <img src="https://img.shields.io/github/downloads/V0idream/AutoSnoreOnSleep/total?label=Release%20Downloads&style=for-the-badge" alt="Release Downloads" />
+  </a>
+</p>
 
 </div>
 
