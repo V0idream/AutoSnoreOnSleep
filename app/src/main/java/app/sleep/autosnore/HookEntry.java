@@ -2,6 +2,8 @@ package app.sleep.autosnore;
 
 import android.content.Context;
 import android.content.Intent;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.view.View;
 
@@ -34,6 +36,8 @@ public final class HookEntry implements IXposedHookLoadPackage {
     private static final String ACTION_FALL_ASLEEP =
             "action_broadcast_device_fall_asleep";
     private static final long DUPLICATE_GUARD_MS = 10_000L;
+    private static final long HEALTH_WARMUP_MS = 2_000L;
+    private static final long START_RETRY_MS = 7_000L;
     private static final long PENDING_TIMEOUT_MS = 60_000L;
     private static final AtomicLong LAST_START = new AtomicLong(0L);
     private static final AtomicLong LAST_TRANSPORT_TRIGGER = new AtomicLong(0L);
@@ -305,29 +309,62 @@ public final class HookEntry implements IXposedHookLoadPackage {
         }
 
         XposedBridge.log(TAG + "Sleep trigger accepted from " + source
-                + "; starting native snore service in background");
-        startSnoreService(context);
+                + "; waking Health main process in background");
+        wakeHealthMainProcess(context);
+
+        Context applicationContext = context.getApplicationContext();
+        if (applicationContext == null) {
+            applicationContext = context;
+        }
+        final Context startContext = applicationContext;
+        Handler handler = new Handler(Looper.getMainLooper());
+        handler.postDelayed(
+                () -> startSnoreService(startContext, "after warm-up"),
+                HEALTH_WARMUP_MS);
+        handler.postDelayed(
+                () -> startSnoreService(startContext, "idempotent retry"),
+                START_RETRY_MS);
     }
 
-    private static void startSnoreService(Context sourceContext) {
+    private static void wakeHealthMainProcess(Context sourceContext) {
+        Intent service = createAudioServiceIntent(2);
+        try {
+            sourceContext.startService(service);
+            XposedBridge.log(TAG
+                    + "Health main-process warm-up command dispatched");
+        } catch (Throwable throwable) {
+            XposedBridge.log(TAG
+                    + "Health main-process warm-up command failed");
+            XposedBridge.log(throwable);
+        }
+    }
+
+    private static void startSnoreService(Context sourceContext, String phase) {
         Context context = sourceContext.getApplicationContext();
         if (context == null) {
             context = sourceContext;
         }
-        Intent service = new Intent();
-        service.setClassName(TARGET_PACKAGE, AUDIO_RECORD_SERVICE);
-        service.putExtra("AUDIO_RECORD_KEY", 0);
-        service.putExtra("KEY_START_ALARM", true);
-        service.putExtra("KEY_FROM_WEB_VIEW", false);
+        Intent service = createAudioServiceIntent(0);
         try {
             context.startService(service);
             XposedBridge.log(TAG
-                    + "Native background snore start command dispatched");
+                    + "Native background snore start command dispatched: " + phase);
         } catch (Throwable throwable) {
             XposedBridge.log(TAG
-                    + "Native background snore start command failed");
+                    + "Native background snore start command failed: " + phase);
             XposedBridge.log(throwable);
         }
+    }
+
+    private static Intent createAudioServiceIntent(int command) {
+        Intent service = new Intent();
+        service.setClassName(TARGET_PACKAGE, AUDIO_RECORD_SERVICE);
+        service.putExtra("AUDIO_RECORD_KEY", command);
+        if (command == 0) {
+            service.putExtra("KEY_START_ALARM", true);
+            service.putExtra("KEY_FROM_WEB_VIEW", false);
+        }
+        return service;
     }
 
     private static boolean isValidSleepSignal(Context context, Intent signal) {
