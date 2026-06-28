@@ -1,13 +1,18 @@
 package app.sleep.autosnore;
 
+import android.app.Activity;
+import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Process;
 import android.os.SystemClock;
 import android.view.View;
 
 import java.lang.ref.WeakReference;
+import java.lang.reflect.Field;
 import java.util.concurrent.atomic.AtomicLong;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -35,9 +40,12 @@ public final class HookEntry implements IXposedHookLoadPackage {
             "com.heytap.health.sleep.audio.service.AudioRecordService2";
     private static final String ACTION_FALL_ASLEEP =
             "action_broadcast_device_fall_asleep";
+    private static final String EXTRA_FOREGROUND_START =
+            "app.sleep.autosnore.EXTRA_FOREGROUND_START";
     private static final long DUPLICATE_GUARD_MS = 10_000L;
-    private static final long HEALTH_WARMUP_MS = 2_000L;
-    private static final long START_RETRY_MS = 7_000L;
+    private static final long FOREGROUND_RETRY_MS = 500L;
+    private static final long MAIN_PROCESS_RESTART_DELAY_MS = 700L;
+    private static final long RETURN_HOME_MS = 1_500L;
     private static final long PENDING_TIMEOUT_MS = 60_000L;
     private static final AtomicLong LAST_START = new AtomicLong(0L);
     private static final AtomicLong LAST_TRANSPORT_TRIGGER = new AtomicLong(0L);
@@ -48,6 +56,11 @@ public final class HookEntry implements IXposedHookLoadPackage {
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam loadPackageParam) {
+        if ("android".equals(loadPackageParam.packageName)
+                && "android".equals(loadPackageParam.processName)) {
+            hookColorOsLockScreenInterceptor(loadPackageParam.classLoader);
+            return;
+        }
         if (!TARGET_PACKAGE.equals(loadPackageParam.packageName)) {
             return;
         }
@@ -60,9 +73,93 @@ public final class HookEntry implements IXposedHookLoadPackage {
         } else if (TARGET_PACKAGE.equals(loadPackageParam.processName)) {
             hookSleepSignal(loadPackageParam.classLoader);
             hookSnoreCard(loadPackageParam.classLoader);
+            hookSleepHistoryCreate(loadPackageParam.classLoader);
             hookSleepHistoryResume(loadPackageParam.classLoader);
             hookAudioService(loadPackageParam.classLoader);
         }
+    }
+
+    private static void hookColorOsLockScreenInterceptor(ClassLoader classLoader) {
+        try {
+            Class<?> activityRecord = Class.forName(
+                    "com.android.server.wm.ActivityRecord", false, classLoader);
+            Class<?> keyguardController = Class.forName(
+                    "com.android.server.wm.KeyguardController", false, classLoader);
+
+            XposedHelpers.findAndHookMethod(
+                    "com.android.server.wm.OplusInterceptLockScreenWindow",
+                    classLoader,
+                    "keyguardFlagCheck",
+                    activityRecord,
+                    keyguardController,
+                    lockScreenBypassHook("keyguardFlagCheck"));
+            XposedHelpers.findAndHookMethod(
+                    "com.android.server.wm.OplusInterceptLockScreenWindow",
+                    classLoader,
+                    "execInterceptWindow",
+                    Context.class,
+                    activityRecord,
+                    boolean.class,
+                    lockScreenBypassHook("execInterceptWindow"));
+            XposedBridge.log(TAG
+                    + "ColorOS lock-screen interceptor hooks installed");
+        } catch (Throwable throwable) {
+            XposedBridge.log(TAG
+                    + "ColorOS lock-screen interceptor hook installation failed");
+            XposedBridge.log(throwable);
+        }
+    }
+
+    private static XC_MethodHook lockScreenBypassHook(String method) {
+        return new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) {
+                Object record = param.args.length > 1
+                        && param.args[1] != null
+                        && param.args[1].getClass().getName().endsWith("ActivityRecord")
+                        ? param.args[1]
+                        : param.args[0];
+                if (!isHealthSleepActivity(record)) {
+                    return;
+                }
+                param.setResult(false);
+                XposedBridge.log(TAG
+                        + "ColorOS lock-screen interception bypassed: " + method);
+            }
+        };
+    }
+
+    private static boolean isHealthSleepActivity(Object activityRecord) {
+        if (activityRecord == null) {
+            return false;
+        }
+        try {
+            Field field = findField(
+                    activityRecord.getClass(), "mActivityComponent");
+            Object component = field.get(activityRecord);
+            String name = String.valueOf(component);
+            return name.contains(TARGET_PACKAGE)
+                    && name.contains("SleepHistoryActivity");
+        } catch (Throwable ignored) {
+            String record = String.valueOf(activityRecord);
+            return record.contains(TARGET_PACKAGE)
+                    && record.contains("SleepHistoryActivity");
+        }
+    }
+
+    private static Field findField(Class<?> type, String name)
+            throws NoSuchFieldException {
+        Class<?> current = type;
+        while (current != null) {
+            try {
+                Field field = current.getDeclaredField(name);
+                field.setAccessible(true);
+                return field;
+            } catch (NoSuchFieldException ignored) {
+                current = current.getSuperclass();
+            }
+        }
+        throw new NoSuchFieldException(name);
     }
 
     private static void hookApplicationContext(ClassLoader classLoader) {
@@ -289,12 +386,66 @@ public final class HookEntry implements IXposedHookLoadPackage {
                     new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
+                            Activity activity = (Activity) param.thisObject;
+                            Intent intent = activity.getIntent();
+                            if (intent != null
+                                    && intent.getBooleanExtra(
+                                            EXTRA_FOREGROUND_START, false)) {
+                                intent.removeExtra(EXTRA_FOREGROUND_START);
+                                XposedBridge.log(TAG
+                                        + "Health foreground start flow resumed");
+                                startSnoreService(activity, "foreground resumed");
+                                Handler handler = new Handler(Looper.getMainLooper());
+                                handler.postDelayed(
+                                        () -> startSnoreService(
+                                                activity, "foreground retry"),
+                                        FOREGROUND_RETRY_MS);
+                                handler.postDelayed(
+                                        () -> returnToHome(activity, false),
+                                        RETURN_HOME_MS);
+                                handler.postDelayed(
+                                        () -> returnToHome(activity, false),
+                                        RETURN_HOME_MS + 1500L);
+                                handler.postDelayed(
+                                        () -> returnToHome(activity, true),
+                                        RETURN_HOME_MS + 3500L);
+                            }
                             scheduleNativeButtonClick(600L);
                         }
                     });
             XposedBridge.log(TAG + "SleepHistoryActivity resume hook installed");
         } catch (Throwable throwable) {
             XposedBridge.log(TAG + "SleepHistoryActivity resume hook installation failed");
+            XposedBridge.log(throwable);
+        }
+    }
+
+    private static void hookSleepHistoryCreate(ClassLoader classLoader) {
+        try {
+            XposedHelpers.findAndHookMethod(
+                    SLEEP_HISTORY_ACTIVITY,
+                    classLoader,
+                    "onCreate",
+                    Bundle.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            Activity activity = (Activity) param.thisObject;
+                            Intent intent = activity.getIntent();
+                            if (intent == null
+                                    || !intent.getBooleanExtra(
+                                            EXTRA_FOREGROUND_START, false)) {
+                                return;
+                            }
+                            activity.setShowWhenLocked(true);
+                            activity.setTurnScreenOn(true);
+                            XposedBridge.log(TAG
+                                    + "Lock-screen foreground bridge enabled");
+                        }
+                    });
+            XposedBridge.log(TAG + "SleepHistoryActivity create hook installed");
+        } catch (Throwable throwable) {
+            XposedBridge.log(TAG + "SleepHistoryActivity create hook installation failed");
             XposedBridge.log(throwable);
         }
     }
@@ -309,32 +460,56 @@ public final class HookEntry implements IXposedHookLoadPackage {
         }
 
         XposedBridge.log(TAG + "Sleep trigger accepted from " + source
-                + "; waking Health main process in background");
-        wakeHealthMainProcess(context);
-
-        Context applicationContext = context.getApplicationContext();
-        if (applicationContext == null) {
-            applicationContext = context;
-        }
-        final Context startContext = applicationContext;
-        Handler handler = new Handler(Looper.getMainLooper());
-        handler.postDelayed(
-                () -> startSnoreService(startContext, "after warm-up"),
-                HEALTH_WARMUP_MS);
-        handler.postDelayed(
-                () -> startSnoreService(startContext, "idempotent retry"),
-                START_RETRY_MS);
+                + "; restarting Health foreground start flow");
+        killHealthMainProcess(context);
+        new Handler(Looper.getMainLooper()).postDelayed(
+                () -> launchHealthForeground(context),
+                MAIN_PROCESS_RESTART_DELAY_MS);
     }
 
-    private static void wakeHealthMainProcess(Context sourceContext) {
-        Intent service = createAudioServiceIntent(2);
+    private static void killHealthMainProcess(Context context) {
         try {
-            sourceContext.startService(service);
+            ActivityManager manager =
+                    (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
+            if (manager == null || manager.getRunningAppProcesses() == null) {
+                return;
+            }
+            for (ActivityManager.RunningAppProcessInfo process
+                    : manager.getRunningAppProcesses()) {
+                if (TARGET_PACKAGE.equals(process.processName)
+                        && process.pid != Process.myPid()) {
+                    XposedBridge.log(TAG
+                            + "Killing Health main process pid=" + process.pid);
+                    Process.killProcess(process.pid);
+                    return;
+                }
+            }
+            XposedBridge.log(TAG + "Health main process was not running");
+        } catch (Throwable throwable) {
+            XposedBridge.log(TAG + "Unable to kill Health main process");
+            XposedBridge.log(throwable);
+        }
+    }
+
+    private static void launchHealthForeground(Context sourceContext) {
+        Context context = sourceContext.getApplicationContext();
+        if (context == null) {
+            context = sourceContext;
+        }
+        Intent activity = new Intent();
+        activity.setClassName(TARGET_PACKAGE, SLEEP_HISTORY_ACTIVITY);
+        activity.putExtra("tab", "0");
+        activity.putExtra(EXTRA_FOREGROUND_START, true);
+        activity.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        try {
+            context.startActivity(activity);
             XposedBridge.log(TAG
-                    + "Health main-process warm-up command dispatched");
+                    + "Health foreground launch dispatched");
         } catch (Throwable throwable) {
             XposedBridge.log(TAG
-                    + "Health main-process warm-up command failed");
+                    + "Health foreground launch failed");
             XposedBridge.log(throwable);
         }
     }
@@ -365,6 +540,25 @@ public final class HookEntry implements IXposedHookLoadPackage {
             service.putExtra("KEY_FROM_WEB_VIEW", false);
         }
         return service;
+    }
+
+    private static void returnToHome(Activity activity, boolean finalAttempt) {
+        try {
+            Intent home = new Intent(Intent.ACTION_MAIN);
+            home.addCategory(Intent.CATEGORY_HOME);
+            home.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                    | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+            activity.startActivity(home);
+            activity.moveTaskToBack(true);
+            if (finalAttempt && !activity.isFinishing()) {
+                activity.finish();
+            }
+            XposedBridge.log(TAG + "Recording start dispatched; home enforced"
+                    + (finalAttempt ? " (final)" : ""));
+        } catch (Throwable throwable) {
+            XposedBridge.log(TAG + "Unable to return to home");
+            XposedBridge.log(throwable);
+        }
     }
 
     private static boolean isValidSleepSignal(Context context, Intent signal) {
