@@ -1,18 +1,19 @@
-# v2.2.0
+# v2.3.0
 
 ## 本次更新
 
-- 收到真实手表睡眠信号后，先终止健康主进程并重新启动，解决前后台状态不一致。
-- 健康页面取得前台资格后发送原生 `AudioRecordService2 command=0`，兼容 Android 16 麦克风前台限制。
-- 增加仅针对 `com.heytap.health/.sleep.SleepHistoryActivity` 的 ColorOS 锁屏拦截放行。
-- 录音启动后自动返回桌面；保留原生通知、停止和数据保存逻辑。
+- 唯一主触发源改为手表下发的 `SleepModelSettings.isStartNow=true`。
+- 删除 `SleepModeManager.r(...)` 的手机免打扰联动触发。
+- 删除旧版 `action_broadcast_device_fall_asleep` 兼容触发。
+- 手动开启手机免打扰不再启动鼾声监测，避免误触发。
+- 保留主进程强制重启、锁屏放行、原生 `AudioRecordService2 command=0` 和自动返回桌面逻辑。
 
-## 实机验证
+## 实机依据
 
 - OPPO 健康：`6.4.6_cb99e90_260626`
 - 包名：`com.heytap.health`
-- 场景：健康主进程已清理、手机锁屏
-- 结果：睡眠信号、主进程重启、锁屏放行、`command=0` 与麦克风录音均已确认
+- 睡眠状态入口：`SleepModeManager.t(SleepModelSettings)`
+- 生效条件：`isStartNow=true`
 
 ## 安装要求
 

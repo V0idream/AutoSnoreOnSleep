@@ -24,8 +24,6 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 public final class HookEntry implements IXposedHookLoadPackage {
     private static final String TAG = "[AutoSnoreOnSleep] ";
     private static final String TARGET_PACKAGE = "com.heytap.health";
-    private static final String SLEEP_RECEIVER =
-            "com.heytap.health.sleep.receiver.SleepStateReceiver";
     private static final String SLEEP_HISTORY_ACTIVITY =
             "com.heytap.health.sleep.SleepHistoryActivity";
     private static final String SNORE_MONITOR_CARD =
@@ -38,8 +36,6 @@ public final class HookEntry implements IXposedHookLoadPackage {
             "com.heytap.databaseengine.model.SleepModelSettings";
     private static final String AUDIO_RECORD_SERVICE =
             "com.heytap.health.sleep.audio.service.AudioRecordService2";
-    private static final String ACTION_FALL_ASLEEP =
-            "action_broadcast_device_fall_asleep";
     private static final String EXTRA_FOREGROUND_START =
             "app.sleep.autosnore.EXTRA_FOREGROUND_START";
     private static final long DUPLICATE_GUARD_MS = 10_000L;
@@ -71,7 +67,6 @@ public final class HookEntry implements IXposedHookLoadPackage {
             hookRawSleepSignal(loadPackageParam.classLoader);
             hookWatchSleepModeSignal(loadPackageParam.classLoader);
         } else if (TARGET_PACKAGE.equals(loadPackageParam.processName)) {
-            hookSleepSignal(loadPackageParam.classLoader);
             hookSnoreCard(loadPackageParam.classLoader);
             hookSleepHistoryCreate(loadPackageParam.classLoader);
             hookSleepHistoryResume(loadPackageParam.classLoader);
@@ -233,27 +228,6 @@ public final class HookEntry implements IXposedHookLoadPackage {
                         }
                     });
             XposedBridge.log(TAG + "Watch sleep-mode setting hook installed");
-
-            XposedHelpers.findAndHookMethod(
-                    SLEEP_MODE_MANAGER,
-                    classLoader,
-                    "r",
-                    boolean.class,
-                    int.class,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) {
-                            boolean enabled = (Boolean) param.args[0];
-                            int updateTime = (Integer) param.args[1];
-                            XposedBridge.log(TAG
-                                    + "Phone DND linkage reached: enabled="
-                                    + enabled + ", updateTime=" + updateTime);
-                            if (enabled) {
-                                triggerMainProcessFromTransport("phone DND linkage");
-                            }
-                        }
-                    });
-            XposedBridge.log(TAG + "Phone DND linkage hook installed");
         } catch (Throwable throwable) {
             XposedBridge.log(TAG + "Watch sleep-mode hook installation failed");
             XposedBridge.log(throwable);
@@ -276,33 +250,6 @@ public final class HookEntry implements IXposedHookLoadPackage {
         }
 
         beginBackgroundStart(context, source);
-    }
-
-    private static void hookSleepSignal(ClassLoader classLoader) {
-        try {
-            XposedHelpers.findAndHookMethod(
-                    SLEEP_RECEIVER,
-                    classLoader,
-                    "onReceive",
-                    Context.class,
-                    Intent.class,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) {
-                            Context context = (Context) param.args[0];
-                            Intent signal = (Intent) param.args[1];
-                            if (!isValidSleepSignal(context, signal)) {
-                                return;
-                            }
-                            beginBackgroundStart(
-                                    context, "legacy fall-asleep broadcast");
-                        }
-                    });
-            XposedBridge.log(TAG + "Sleep signal hook installed");
-        } catch (Throwable throwable) {
-            XposedBridge.log(TAG + "Sleep signal hook installation failed");
-            XposedBridge.log(throwable);
-        }
     }
 
     private static void hookSnoreCard(ClassLoader classLoader) {
@@ -559,20 +506,6 @@ public final class HookEntry implements IXposedHookLoadPackage {
             XposedBridge.log(TAG + "Unable to return to home");
             XposedBridge.log(throwable);
         }
-    }
-
-    private static boolean isValidSleepSignal(Context context, Intent signal) {
-        if (context == null
-                || signal == null
-                || !ACTION_FALL_ASLEEP.equals(signal.getAction())) {
-            return false;
-        }
-        String target = signal.getPackage();
-        if (target != null && !TARGET_PACKAGE.equals(target)) {
-            XposedBridge.log(TAG + "Ignored sleep signal for package " + target);
-            return false;
-        }
-        return true;
     }
 
     private static void openSleepHistory(Context receiverContext) {

@@ -47,7 +47,7 @@
 
 - 已验证 OPPO 健康：`6.4.6_cb99e90_260626`
 - 目标包名：`com.heytap.health`
-- 模块版本：`2.2.0`
+- 模块版本：`2.3.0`
 - 系统要求：Android 12 及以上、LSPosed
 - LSPosed 作用域：`OPPO 健康`、`系统框架`
 
@@ -57,7 +57,7 @@
 
 ## ⚙️ 工作方式
 
-模块监听 OPPO 健康 `:transport` 进程中的真实睡眠模式链路：
+模块直接监听 OPPO 健康 `:transport` 进程中的真实睡眠状态，不再使用手机免打扰变化作为触发条件：
 
 ```text
 SleepModelSetting.isStartNow=true
