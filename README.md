@@ -45,9 +45,9 @@
 
 ## 🧩 兼容性
 
-- 已验证 OPPO 健康：`6.4.6_cb99e90_260626`
+- 已验证 OPPO 健康：`6.4.7_930e22c_260629`
 - 目标包名：`com.heytap.health`
-- 模块版本：`2.3.0`
+- 模块版本：`2.4.0`
 - 系统要求：Android 12 及以上、LSPosed
 - LSPosed 作用域：`OPPO 健康`、`系统框架`
 
@@ -71,7 +71,8 @@ SleepModelSetting.isStartNow=true
 2. 重新启动健康睡眠页面。
 3. 锁屏时仅对白名单组件 `SleepHistoryActivity` 放行 ColorOS 锁屏显示拦截。
 4. 页面取得前台资格后发送原生 `AudioRecordService2 command=0`。
-5. 进行一次幂等重试，随后自动返回桌面。
+5. 将 `AudioRecordService2` 强制提升为 microphone 前台服务，避免返回桌面后被 Android 16 静音或回收。
+6. 进行一次幂等重试，随后自动返回桌面。
 
 模块保留健康原生录音服务、通知、停止与数据保存逻辑，并对重复睡眠信号去重。
 

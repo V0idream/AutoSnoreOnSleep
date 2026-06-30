@@ -1,25 +1,25 @@
-# v2.3.0
+# v2.4.0
 
-## 本次更新
+## 本次修复
 
-- 唯一主触发源改为手表下发的 `SleepModelSettings.isStartNow=true`。
-- 删除 `SleepModeManager.r(...)` 的手机免打扰联动触发。
-- 删除旧版 `action_broadcast_device_fall_asleep` 兼容触发。
-- 手动开启手机免打扰不再启动鼾声监测，避免误触发。
-- 保留主进程强制重启、锁屏放行、原生 `AudioRecordService2 command=0` 和自动返回桌面逻辑。
+- 适配 OPPO 健康 `6.4.7_930e22c_260629`。
+- 修复锁屏唤醒后录音仅运行约 5 秒便被 Android 16 静音的问题。
+- 在 `AudioRecordService2 command=0` 到达时强制建立 microphone 前台服务。
+- 返回桌面后继续保留麦克风访问资格和健康主进程。
+- 收到原生停止命令 `command=1` 后移除前台服务通知。
 
-## 实机依据
+## 根因
 
-- OPPO 健康：`6.4.6_cb99e90_260626`
-- 包名：`com.heytap.health`
-- 睡眠状态入口：`SleepModeManager.t(SleepModelSettings)`
-- 生效条件：`isStartNow=true`
+旧版实际已经启动 `AudioRecord`，但健康页面返回后台后，系统将录音状态改为 `silenced`。同时服务未保持前台状态，健康主进程可能被回收。
+
+## 信号入口
+
+- 仅监听 `SleepModeManager.t(SleepModelSettings)`。
+- 仅在 `SleepModelSettings.isStartNow=true` 时触发。
+- 不依赖手机免打扰状态。
 
 ## 安装要求
 
-在 LSPosed 作用域中同时勾选：
-
-- OPPO 健康
-- 系统框架
-
-更新模块或调整作用域后需要重启手机。
+- OPPO 健康：`6.4.7_930e22c_260629`
+- LSPosed 作用域：`OPPO 健康`、`系统框架`
+- 更新后需要重启手机。

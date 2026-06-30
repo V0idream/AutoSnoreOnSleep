@@ -2,9 +2,15 @@ package app.sleep.autosnore;
 
 import android.app.Activity;
 import android.app.ActivityManager;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ServiceInfo;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Process;
@@ -42,6 +48,9 @@ public final class HookEntry implements IXposedHookLoadPackage {
     private static final long FOREGROUND_RETRY_MS = 500L;
     private static final long MAIN_PROCESS_RESTART_DELAY_MS = 700L;
     private static final long RETURN_HOME_MS = 1_500L;
+    private static final String MONITOR_CHANNEL_ID =
+            "auto_snore_monitoring";
+    private static final int MONITOR_NOTIFICATION_ID = 0x534E4F52;
     private static final long PENDING_TIMEOUT_MS = 60_000L;
     private static final AtomicLong LAST_START = new AtomicLong(0L);
     private static final AtomicLong LAST_TRANSPORT_TRIGGER = new AtomicLong(0L);
@@ -315,11 +324,97 @@ public final class HookEntry implements IXposedHookLoadPackage {
                                     : intent.getIntExtra("AUDIO_RECORD_KEY", -100);
                             XposedBridge.log(TAG
                                     + "AudioRecordService2 onStartCommand command=" + command);
+                            Service service = (Service) param.thisObject;
+                            if (command == 0) {
+                                ensureMicrophoneForeground(
+                                        service, "before command=0");
+                            }
+                        }
+
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            Intent intent = (Intent) param.args[0];
+                            int command = intent == null
+                                    ? -100
+                                    : intent.getIntExtra("AUDIO_RECORD_KEY", -100);
+                            Service service = (Service) param.thisObject;
+                            if (command == 0) {
+                                ensureMicrophoneForeground(
+                                        service, "after command=0");
+                                Handler handler = new Handler(
+                                        Looper.getMainLooper());
+                                handler.postDelayed(
+                                        () -> ensureMicrophoneForeground(
+                                                service, "500ms retry"),
+                                        500L);
+                                handler.postDelayed(
+                                        () -> ensureMicrophoneForeground(
+                                                service, "2000ms retry"),
+                                        2000L);
+                            } else if (command == 1) {
+                                service.stopForeground(
+                                        Service.STOP_FOREGROUND_REMOVE);
+                                XposedBridge.log(TAG
+                                        + "Forced microphone foreground stopped");
+                            }
                         }
                     });
             XposedBridge.log(TAG + "AudioRecordService2 trace hook installed");
         } catch (Throwable throwable) {
             XposedBridge.log(TAG + "AudioRecordService2 trace hook installation failed");
+            XposedBridge.log(throwable);
+        }
+    }
+
+    private static void ensureMicrophoneForeground(
+            Service service, String phase) {
+        try {
+            NotificationManager manager =
+                    (NotificationManager) service.getSystemService(
+                            Context.NOTIFICATION_SERVICE);
+            if (manager != null) {
+                NotificationChannel channel = new NotificationChannel(
+                        MONITOR_CHANNEL_ID,
+                        "睡眠鼾声监测",
+                        NotificationManager.IMPORTANCE_LOW);
+                channel.setDescription("保持手机鼾声监测在后台运行");
+                channel.setShowBadge(false);
+                channel.setSound(null, null);
+                manager.createNotificationChannel(channel);
+            }
+
+            int icon = service.getApplicationInfo().icon;
+            if (icon == 0) {
+                icon = android.R.drawable.ic_btn_speak_now;
+            }
+            Notification.Builder builder =
+                    new Notification.Builder(service, MONITOR_CHANNEL_ID)
+                            .setSmallIcon(icon)
+                            .setContentTitle("手机监测鼾声")
+                            .setContentText("正在进行睡眠鼾声监测")
+                            .setCategory(Notification.CATEGORY_SERVICE)
+                            .setOngoing(true)
+                            .setOnlyAlertOnce(true)
+                            .setShowWhen(false);
+            if (Build.VERSION.SDK_INT >= 31) {
+                builder.setForegroundServiceBehavior(
+                        Notification.FOREGROUND_SERVICE_IMMEDIATE);
+            }
+            Notification notification = builder.build();
+            if (Build.VERSION.SDK_INT >= 29) {
+                service.startForeground(
+                        MONITOR_NOTIFICATION_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
+            } else {
+                service.startForeground(
+                        MONITOR_NOTIFICATION_ID, notification);
+            }
+            XposedBridge.log(TAG
+                    + "Microphone foreground enforced: " + phase);
+        } catch (Throwable throwable) {
+            XposedBridge.log(TAG
+                    + "Unable to enforce microphone foreground: " + phase);
             XposedBridge.log(throwable);
         }
     }
